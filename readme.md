@@ -8,7 +8,7 @@ Data is isolated in user folders.
 
 - Write-through generics-based cache with configurable LRU eviction.
 - Simple JSON storage: every user lives under `baseFolder/<user>/<user>.json`.
-- Concurrency-safe operations (`Set`, `Get`, `Update`, `Delete`) guarded by RW locks.
+- Concurrency-safe operations (`Set`, `Get`, `Update`, `Delete`) guarded by RW locks, with per-user mutexes so user-specific work doesn't block the entire cache.
 - Deleted users are archived to `baseFolder/deleted/<user>` for later inspection/recovery.
 - Minimal interface surface (`BaseUserOps`) so you can adapt existing structs easily.
 
@@ -16,7 +16,7 @@ Data is isolated in user folders.
 
 1. Define your user model by embedding `models.BaseUser` (or implementing `BaseUserOps` yourself).
 2. Create a cache instance by passing the base folder, an optional max capacity, and a constructor for your type.
-3. Use the provided CRUD helpers to manage user records. All operations persist to disk so data survives process restarts.
+3. Use the provided helpers to manage user records. The cache only grabs its global RW lock while it touches the shared map/LRU; user-specific mutations happen under that user’s mutex so concurrent IDs don’t block each other. All persistence is handled by the cache so data survives process restarts.
 
 ```go
 type Profile struct {
@@ -36,7 +36,7 @@ err := store.Set("user-123", func(p *Profile) {
 // Read a user. If it does not yet exist on disk, an empty record is initialized.
 profile, err := store.Get("user-123")
 
-// Update a user and immediately persist the change.
+// Update a user and persist the change atomically.
 err = store.Update("user-123", func(p *Profile) {
     p.Email = "new@example.com"
 })
@@ -45,11 +45,13 @@ err = store.Update("user-123", func(p *Profile) {
 err = store.Delete("user-123")
 ```
 
+`models.BaseUser` still exposes `RLock/RUnlock/Lock/Unlock` in case you need custom coordination, but most callers can stick with the cache helpers (`Set`, `Get`, `Update`, `Delete`) and avoid manual locking entirely. Because the cache separates the global lock from per-user locks, work for different users proceeds in parallel even when they mutate their records.
+
 ### Operations at a glance
 
 - `Set(id, initializer)`: creates a brand-new user folder + JSON file; returns `ErrUserExists` if the user already exists.
 - `Get(id)`: returns the cached struct, rehydrating from `baseFolder/<id>/<id>.json`; creates a new empty user if no file is present.
-- `Update(id, updater)`: lets you mutate the struct and automatically writes the JSON back to disk in a single critical section.
+- `Update(id, updater)`: locks the user record, runs your mutation, refreshes `lastUpdated`, writes JSON back to disk, and bumps the LRU entry in a single critical section guarded by the user’s mutex (not the entire cache).
 - `Delete(id)`: removes the entry from the in-memory cache and moves `baseFolder/<id>` to `baseFolder/deleted/<id>` for archival.
 - Automatic LRU eviction keeps the in-memory cache at or below the capacity you configure, while the disk copy is retained.
 
@@ -88,7 +90,7 @@ A fully working sample lives under `examples/basic`. Run it with:
 go run ./examples/basic
 ```
 
-The program writes user data into a temporary folder, exercises `Set`, `Get`, `Update`, and `Delete`, then prints the resulting archive location.
+The program writes user data into a temporary folder, exercises `Set`, `Get`, `Update`, and `Delete`, then prints the resulting archive location to illustrate that operations against one user do not block the whole cache.
 
 
 ## Project layout

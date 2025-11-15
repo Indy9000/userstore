@@ -86,6 +86,9 @@ func (c *UserCache[T]) saveToDisk(userId string, d T) error {
 	return os.Rename(tempPath, fp)
 }
 
+// Get returns the cached user, loading it from disk (or creating a new record)
+// if necessary. Callers must treat the returned pointer as read-only unless
+// they go through Update or take the per-user lock themselves.
 func (c *UserCache[T]) Get(userId string) (T, error) {
 	// check the cache first
 	c.mu.RLock()
@@ -129,6 +132,8 @@ func (c *UserCache[T]) Get(userId string) (T, error) {
 	return value, nil
 }
 
+// Set creates a brand-new user in both cache and disk storage. It fails with
+// ErrUserExists if the user already exists in memory or on disk.
 func (c *UserCache[T]) Set(userId string, initializer func(T)) error {
 	exists, e := c.exists(userId)
 	if e != nil {
@@ -173,27 +178,48 @@ func (c *UserCache[T]) Set(userId string, initializer func(T)) error {
 	return nil
 }
 
+// Update locks the user, applies the mutation, refreshes lastUpdated, and
+// writes the data back to disk before releasing the lock. All user mutations
+// should flow through this method to avoid data races and guarantee durability.
 func (c *UserCache[T]) Update(userId string, updater func(T)) error {
-	// find the value first, if not found, it will return error
-	value, e := c.Get(userId)
-	if e != nil {
-		return e
+	user, err := c.Get(userId)
+	if err != nil {
+		return err
 	}
-	{
-		c.mu.Lock()
-		defer c.mu.Unlock()
-		// update
-		updater(value)
-		value.SetLastUpdated()
 
-		// Write-through to disk
-		e = c.saveToDisk(userId, value)
-		if e != nil {
-			return e
+	user.Lock()
+	defer user.Unlock()
+	updater(user)
+
+	return c.persistLocked(user)
+}
+
+// persistLocked writes an updated user to disk and bumps it in the LRU.
+// Caller must hold the user lock.
+func (c *UserCache[T]) persistLocked(user T) error {
+	user.SetLastUpdated()
+
+	userId := user.GetUserID()
+	if err := c.saveToDisk(userId, user); err != nil {
+		return err
+	}
+
+	// protect shared cache/LRU structures while we insert/update the entry
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if elem, ok := c.cache[userId]; ok {
+		// already in cache: refresh value pointer and bump recency
+		elem.Value.(*entry[T]).value = user
+		c.touch(elem)
+	} else {
+		// first time we put this user in memory: add to map/LRU + enforce capacity
+		ent := &entry[T]{key: userId, value: user}
+		elem := c.lru.PushFront(ent)
+		c.cache[userId] = elem
+		if c.maxCapacity > 0 && c.lru.Len() > c.maxCapacity {
+			c.evict()
 		}
-		c.touch(c.cache[userId])
 	}
-
 	return nil
 }
 

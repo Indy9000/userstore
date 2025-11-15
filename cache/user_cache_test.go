@@ -75,7 +75,7 @@ func TestUserCacheGetCreatesUser(t *testing.T) {
 	}
 }
 
-func TestUserCacheUpdatePersists(t *testing.T) {
+func TestUserCacheUpdateWritesChanges(t *testing.T) {
 	dir := t.TempDir()
 	c := NewUserCache[*testUser](dir, 0, newTestUser)
 	if err := c.Set("user", func(u *testUser) {
