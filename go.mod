@@ -1,0 +1,3 @@
+module userstore
+
+go 1.24.1
