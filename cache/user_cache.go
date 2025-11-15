@@ -10,7 +10,7 @@ import (
 	"path/filepath"
 	"sync"
 
-	"userstore/pkg/models"
+	"github.com/indy9000/userstore/models"
 )
 
 var (

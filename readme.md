@@ -95,20 +95,22 @@ The program writes user data into a temporary folder, exercises `Set`, `Get`, `U
 
 ```
 .
+├── cache
+│   └── user_cache.go     # generic LRU cache with disk backing
+├── examples
+│   └── basic
+│       └── main.go       # runnable demo
 ├── go.mod
-└── pkg
-    ├── cache
-    │   └── user_cache.go     # generic LRU cache with disk backing
-    └── models
-        └── base_user.go      # BaseUser struct + BaseUserOps interface
+└── models
+    └── base_user.go      # BaseUser struct + BaseUserOps interface
 ```
 
 Import the specific pieces you need:
 
 ```go
 import (
-    "userstore/pkg/cache"
-    "userstore/pkg/models"
+    "github.com/indy9000/userstore/cache"
+    "github.com/indy9000/userstore/models"
 )
 ```
 

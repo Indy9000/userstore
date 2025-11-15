@@ -7,8 +7,8 @@ import (
 	"path/filepath"
 	"time"
 
-	"userstore/pkg/cache"
-	"userstore/pkg/models"
+	"github.com/indy9000/userstore/cache"
+	"github.com/indy9000/userstore/models"
 )
 
 type profile struct {

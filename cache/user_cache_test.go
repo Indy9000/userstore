@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"userstore/pkg/models"
+	"github.com/indy9000/userstore/models"
 )
 
 type testUser struct {
