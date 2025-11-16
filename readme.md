@@ -11,6 +11,7 @@ Data is isolated in user folders.
 - Concurrency-safe operations (`Set`, `Get`, `Update`, `Delete`) guarded by RW locks, with per-user mutexes so user-specific work doesn't block the entire cache.
 - Deleted users are archived to `baseFolder/deleted/<user>` for later inspection/recovery.
 - Minimal interface surface (`BaseUserOps`) so you can adapt existing structs easily.
+- Self-reported semantic version via `userstore.Version` so you can assert compatible builds.
 
 ## Quick start
 
@@ -81,6 +82,18 @@ Each user folder contains exactly one JSON file named after the user ID. You can
 ## Testing
 
 The repository ships with table-driven unit tests covering the cache behavior (`go test ./...`). When adding new functionality, extend the test suite so disk interactions remain safe and deterministic.
+
+## Versioning
+
+Import the root module to introspect the published version at runtime:
+
+```go
+import "github.com/indy9000/userstore"
+
+fmt.Println("userstore version:", userstore.Version)
+```
+
+This value follows semantic versioning. Use it in diagnostics or startup checks to ensure the running binary uses the expected build.
 
 ## Runnable example
 
