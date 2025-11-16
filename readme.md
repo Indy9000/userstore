@@ -38,21 +38,22 @@ err := store.Set("user-123", func(p *Profile) {
 profile, err := store.Get("user-123")
 
 // Update a user and persist the change atomically.
-err = store.Update("user-123", func(p *Profile) {
+err = store.Update("user-123", func(p *Profile) error {
     p.Email = "new@example.com"
+    return nil
 })
 
 // Delete removes the entry from the cache and moves its folder to base/deleted/<user>.
 err = store.Delete("user-123")
 ```
 
-`models.BaseUser` still exposes `RLock/RUnlock/Lock/Unlock` in case you need custom coordination, but most callers can stick with the cache helpers (`Set`, `Get`, `Update`, `Delete`) and avoid manual locking entirely. Because the cache separates the global lock from per-user locks, work for different users proceeds in parallel even when they mutate their records.
+`models.BaseUser` still exposes `RLock/RUnlock/Lock/Unlock` in case you need custom coordination, but most callers can stick with the cache helpers (`Set`, `Get`, `Update`, `Delete`) and avoid manual locking entirely. Because the cache separates the global lock from per-user locks, work for different users proceeds in parallel even when they mutate their records. Returning a non-nil error from the `Update` callback automatically rolls the in-memory struct back to the on-disk snapshot, so callers never leave partially mutated objects behind.
 
 ### Operations at a glance
 
 - `Set(id, initializer)`: creates a brand-new user folder + JSON file; returns `ErrUserExists` if the user already exists.
 - `Get(id)`: returns the cached struct, rehydrating from `baseFolder/<id>/<id>.json`; creates a new empty user if no file is present.
-- `Update(id, updater)`: locks the user record, runs your mutation, refreshes `lastUpdated`, writes JSON back to disk, and bumps the LRU entry in a single critical section guarded by the user’s mutex (not the entire cache).
+- `Update(id, updater)`: locks the user record, runs your mutation, refreshes `lastUpdated`, writes JSON back to disk, and bumps the LRU entry in a single critical section guarded by the user’s mutex (not the entire cache). If the callback returns an error, the struct is reloaded from disk and the error is bubbled up.
 - `Delete(id)`: removes the entry from the in-memory cache and moves `baseFolder/<id>` to `baseFolder/deleted/<id>` for archival.
 - Automatic LRU eviction keeps the in-memory cache at or below the capacity you configure, while the disk copy is retained.
 
@@ -93,7 +94,7 @@ import "github.com/indy9000/userstore"
 fmt.Println("userstore version:", userstore.Version)
 ```
 
-This value follows semantic versioning. Use it in diagnostics or startup checks to ensure the running binary uses the expected build.
+This value follows semantic versioning. Use it in diagnostics or startup checks to ensure the running binary uses the expected build. Refer to [CHANGELOG.md](./changelog.md) for release notes.
 
 ## Runnable example
 

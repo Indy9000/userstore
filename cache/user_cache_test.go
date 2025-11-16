@@ -91,8 +91,9 @@ func TestUserCacheUpdateWritesChanges(t *testing.T) {
 	beforeTime := before.GetLastUpdated()
 
 	time.Sleep(10 * time.Millisecond)
-	if err := c.Update("user", func(u *testUser) {
+	if err := c.Update("user", func(u *testUser) error {
 		u.Name = "after"
+		return nil
 	}); err != nil {
 		t.Fatalf("Update failed: %v", err)
 	}
@@ -106,6 +107,33 @@ func TestUserCacheUpdateWritesChanges(t *testing.T) {
 	}
 	if !after.GetLastUpdated().After(beforeTime) {
 		t.Fatalf("expected lastUpdated to advance")
+	}
+}
+
+func TestUserCacheUpdateRollsBackOnError(t *testing.T) {
+	dir := t.TempDir()
+	c := NewUserCache[*testUser](dir, 0, newTestUser)
+	if err := c.Set("user", func(u *testUser) {
+		u.Name = "before"
+	}); err != nil {
+		t.Fatalf("Set failed: %v", err)
+	}
+
+	wantErr := errors.New("boom")
+	err := c.Update("user", func(u *testUser) error {
+		u.Name = "after"
+		return wantErr
+	})
+	if err == nil || err.Error() != wantErr.Error() {
+		t.Fatalf("expected error %v, got %v", wantErr, err)
+	}
+
+	user, err := c.Get("user")
+	if err != nil {
+		t.Fatalf("Get failed: %v", err)
+	}
+	if user.Name != "before" {
+		t.Fatalf("expected user to be rolled back to before, got %s", user.Name)
 	}
 }
 

@@ -38,8 +38,9 @@ func main() {
 	}
 	fmt.Printf("Loaded %s email=%s\n", alice.GetUserID(), alice.Email)
 
-	if err := store.Update("alice", func(p *profile) {
+	if err := store.Update("alice", func(p *profile) error {
 		p.Email = "new-alice@example.com"
+		return nil
 	}); err != nil {
 		log.Fatalf("update: %v", err)
 	}

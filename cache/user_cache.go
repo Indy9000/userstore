@@ -68,6 +68,18 @@ func (c *UserCache[T]) loadFromDisk(userId string) (T, error) {
 	return u, nil
 }
 
+// restoreFromDisk reloads the persisted JSON directly into the provided user
+// pointer. It assumes the caller already holds the per-user lock.
+func (c *UserCache[T]) restoreFromDisk(userId string, target T) error {
+	fn := fmt.Sprintf("%s.json", userId)
+	fp := filepath.Join(c.baseFolder, userId, fn)
+	bytes, err := os.ReadFile(fp)
+	if err != nil {
+		return err
+	}
+	return json.Unmarshal(bytes, target)
+}
+
 func (c *UserCache[T]) saveToDisk(userId string, d T) error {
 	fn := fmt.Sprintf("%s.json", userId)
 	fp := filepath.Join(c.baseFolder, userId, fn)
@@ -181,7 +193,9 @@ func (c *UserCache[T]) Set(userId string, initializer func(T)) error {
 // Update locks the user, applies the mutation, refreshes lastUpdated, and
 // writes the data back to disk before releasing the lock. All user mutations
 // should flow through this method to avoid data races and guarantee durability.
-func (c *UserCache[T]) Update(userId string, updater func(T)) error {
+// If the updater returns an error, the cached struct is reloaded from disk so
+// callers do not observe partial mutations.
+func (c *UserCache[T]) Update(userId string, updater func(T) error) error {
 	user, err := c.Get(userId)
 	if err != nil {
 		return err
@@ -189,7 +203,12 @@ func (c *UserCache[T]) Update(userId string, updater func(T)) error {
 
 	user.Lock()
 	defer user.Unlock()
-	updater(user)
+	if err := updater(user); err != nil {
+		if restoreErr := c.restoreFromDisk(userId, user); restoreErr != nil {
+			return fmt.Errorf("update failed: %w (rollback failed: %v)", err, restoreErr)
+		}
+		return err
+	}
 
 	return c.persistLocked(user)
 }
