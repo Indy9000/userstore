@@ -9,12 +9,14 @@ All notable changes to this project will be documented in this file. The format 
 - `View` helper that acquires a read lock and runs a callback so callers inspect user data without leaking the shared pointer; the callback now receives `nil` when the user does not exist.
 - Internal `getOrLoad` helper shared by `View`/`Update`.
 - Documentation clarifying how to copy data out of `View`.
+- Convenience scripts `unit-test.sh` and `race-test.sh` to run the test suite locally.
 
 ### Changed
 
 - Removed the exported `Get` method in favor of `View`.
 - `View` no longer auto-creates empty records for missing users; `Update` now returns `ErrUserNotFound` when the target is absent.
 - Updated tests, README, and examples to use the closure-based API.
+- README introduction now calls out the concurrent design explicitly.
 - Bumped module version to `v0.4.0`.
 
 ## [0.3.0] - 2024-02-14
