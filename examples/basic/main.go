@@ -32,11 +32,12 @@ func main() {
 		log.Fatalf("set: %v", err)
 	}
 
-	alice, err := store.Get("alice")
-	if err != nil {
-		log.Fatalf("get: %v", err)
+	if err := store.View("alice", func(alice *profile) error {
+		fmt.Printf("Loaded %s email=%s\n", alice.GetUserID(), alice.Email)
+		return nil
+	}); err != nil {
+		log.Fatalf("view: %v", err)
 	}
-	fmt.Printf("Loaded %s email=%s\n", alice.GetUserID(), alice.Email)
 
 	if err := store.Update("alice", func(p *profile) error {
 		p.Email = "new-alice@example.com"
@@ -45,11 +46,12 @@ func main() {
 		log.Fatalf("update: %v", err)
 	}
 
-	updated, err := store.Get("alice")
-	if err != nil {
-		log.Fatalf("get after update: %v", err)
+	if err := store.View("alice", func(updated *profile) error {
+		fmt.Printf("Updated %s email=%s lastUpdated=%s\n", updated.GetUserID(), updated.Email, updated.GetLastUpdated().Format(time.RFC3339))
+		return nil
+	}); err != nil {
+		log.Fatalf("view after update: %v", err)
 	}
-	fmt.Printf("Updated %s email=%s lastUpdated=%s\n", updated.GetUserID(), updated.Email, updated.GetLastUpdated().Format(time.RFC3339))
 
 	if err := store.Delete("alice"); err != nil {
 		log.Fatalf("delete: %v", err)

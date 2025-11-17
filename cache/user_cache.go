@@ -14,7 +14,8 @@ import (
 )
 
 var (
-	ErrUserExists = errors.New("user already exists")
+	ErrUserExists   = errors.New("user already exists")
+	ErrUserNotFound = errors.New("user not found")
 )
 
 type UserCache[T models.BaseUserOps] struct {
@@ -49,10 +50,8 @@ func (c *UserCache[T]) loadFromDisk(userId string) (T, error) {
 	d, e := os.ReadFile(fp)
 	if e != nil {
 		if os.IsNotExist(e) {
-			u := c.constructor()
-			u.SetUserID(userId)
-			u.SetLastUpdated()
-			return u, nil
+			var zero T
+			return zero, ErrUserNotFound
 		}
 		log.Printf("Failed to load data from file. uid:%s filepath:%s", userId, fp)
 		var zero T
@@ -98,10 +97,7 @@ func (c *UserCache[T]) saveToDisk(userId string, d T) error {
 	return os.Rename(tempPath, fp)
 }
 
-// Get returns the cached user, loading it from disk (or creating a new record)
-// if necessary. Callers must treat the returned pointer as read-only unless
-// they go through Update or take the per-user lock themselves.
-func (c *UserCache[T]) Get(userId string) (T, error) {
+func (c *UserCache[T]) getOrLoad(userId string) (T, error) {
 	// check the cache first
 	c.mu.RLock()
 	elem, ok := c.cache[userId]
@@ -116,7 +112,6 @@ func (c *UserCache[T]) Get(userId string) (T, error) {
 	// Load from disk
 	value, e := c.loadFromDisk(userId)
 	if e != nil {
-		// return empty value with error
 		var zero T
 		return zero, e
 	}
@@ -127,7 +122,7 @@ func (c *UserCache[T]) Get(userId string) (T, error) {
 	defer c.mu.Unlock()
 	elem, ok = c.cache[userId]
 	if ok {
-		// already aded
+		// already added
 		c.touch(elem)
 		return elem.Value.(*entry[T]).value, nil
 	}
@@ -142,6 +137,20 @@ func (c *UserCache[T]) Get(userId string) (T, error) {
 		c.evict()
 	}
 	return value, nil
+}
+
+// View acquires a shared lock on the user (if it exists) and lets the caller
+// inspect it via the provided callback. If the user is missing, ErrUserNotFound
+// is returned and the callback is not invoked. The callback must not mutate the
+// user unless it also takes the write lock manually.
+func (c *UserCache[T]) View(userId string, viewer func(T) error) error {
+	user, err := c.getOrLoad(userId)
+	if err != nil {
+		return err
+	}
+	user.RLock()
+	defer user.RUnlock()
+	return viewer(user)
 }
 
 // Set creates a brand-new user in both cache and disk storage. It fails with
@@ -196,7 +205,7 @@ func (c *UserCache[T]) Set(userId string, initializer func(T)) error {
 // If the updater returns an error, the cached struct is reloaded from disk so
 // callers do not observe partial mutations.
 func (c *UserCache[T]) Update(userId string, updater func(T) error) error {
-	user, err := c.Get(userId)
+	user, err := c.getOrLoad(userId)
 	if err != nil {
 		return err
 	}

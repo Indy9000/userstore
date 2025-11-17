@@ -1,14 +1,12 @@
 # UserStore
 
-UserStore is a simple document storage. It has an in memory write-through LRU cache and a backing storage to disk.
-This can be used to manage user centric data on your backend VPS with minimal ceremony.
-Data is isolated in user folders.
+UserStore is a simple concurrent document storage. It has an in-memory write-through LRU cache, a backing store on disk, and built-in concurrency controls so per-user operations run safely in parallel without blocking the entire cache. This can be used to manage user-centric data on your backend VPS with minimal ceremony. Data is isolated in user folders.
 
 ## Highlights
 
 - Write-through generics-based cache with configurable LRU eviction.
 - Simple JSON storage: every user lives under `baseFolder/<user>/<user>.json`.
-- Concurrency-safe operations (`Set`, `Get`, `Update`, `Delete`) guarded by RW locks, with per-user mutexes so user-specific work doesn't block the entire cache.
+- Concurrency-safe operations (`Set`, `View`, `Update`, `Delete`) guarded by RW locks, with per-user mutexes so user-specific work doesn't block the entire cache.
 - Deleted users are archived to `baseFolder/deleted/<user>` for later inspection/recovery.
 - Minimal interface surface (`BaseUserOps`) so you can adapt existing structs easily.
 - Self-reported semantic version via `userstore.Version` so you can assert compatible builds.
@@ -17,7 +15,7 @@ Data is isolated in user folders.
 
 1. Define your user model by embedding `models.BaseUser` (or implementing `BaseUserOps` yourself).
 2. Create a cache instance by passing the base folder, an optional max capacity, and a constructor for your type.
-3. Use the provided helpers to manage user records. The cache only grabs its global RW lock while it touches the shared map/LRU; user-specific mutations happen under that user’s mutex so concurrent IDs don’t block each other. All persistence is handled by the cache so data survives process restarts.
+3. Use the provided helpers to manage user records. The cache only grabs its global RW lock while it touches the shared map/LRU; user-specific reads/writes happen under that user’s mutex so concurrent IDs don’t block each other. `View` and `Update` run your closures while holding the appropriate locks, so they are concurrency-safe out of the box. All persistence is handled by the cache so data survives process restarts.
 
 ```go
 type Profile struct {
@@ -34,8 +32,11 @@ err := store.Set("user-123", func(p *Profile) {
     p.Email = "user@example.com"
 })
 
-// Read a user. If it does not yet exist on disk, an empty record is initialized.
-profile, err := store.Get("user-123")
+// Read a user (returns ErrUserNotFound if the record is absent).
+err = store.View("user-123", func(profile *Profile) error {
+    fmt.Printf("Loaded %s with email %s\n", profile.GetUserID(), profile.Email)
+    return nil
+})
 
 // Update a user and persist the change atomically.
 err = store.Update("user-123", func(p *Profile) error {
@@ -47,12 +48,12 @@ err = store.Update("user-123", func(p *Profile) error {
 err = store.Delete("user-123")
 ```
 
-`models.BaseUser` still exposes `RLock/RUnlock/Lock/Unlock` in case you need custom coordination, but most callers can stick with the cache helpers (`Set`, `Get`, `Update`, `Delete`) and avoid manual locking entirely. Because the cache separates the global lock from per-user locks, work for different users proceeds in parallel even when they mutate their records. Returning a non-nil error from the `Update` callback automatically rolls the in-memory struct back to the on-disk snapshot, so callers never leave partially mutated objects behind.
+`models.BaseUser` still exposes `RLock/RUnlock/Lock/Unlock` in case you need custom coordination, but most callers can stick with the cache helpers (`Set`, `View`, `Update`, `Delete`) and avoid manual locking entirely. Because the cache separates the global lock from per-user locks, work for different users proceeds in parallel even when they inspect or mutate their records. Returning a non-nil error from the `Update` callback automatically rolls the in-memory struct back to the on-disk snapshot, so callers never leave partially mutated objects behind. `View` runs your callback while holding a read lock (and returns `ErrUserNotFound` if the record is absent), so if you need to use the data outside the closure, make an explicit read-only copy.
 
 ### Operations at a glance
 
 - `Set(id, initializer)`: creates a brand-new user folder + JSON file; returns `ErrUserExists` if the user already exists.
-- `Get(id)`: returns the cached struct, rehydrating from `baseFolder/<id>/<id>.json`; creates a new empty user if no file is present.
+- `View(id, viewer)`: acquires a read lock, invokes your closure so you can inspect fields without leaking the shared pointer, and returns `ErrUserNotFound` if the user does not exist yet.
 - `Update(id, updater)`: locks the user record, runs your mutation, refreshes `lastUpdated`, writes JSON back to disk, and bumps the LRU entry in a single critical section guarded by the user’s mutex (not the entire cache). If the callback returns an error, the struct is reloaded from disk and the error is bubbled up.
 - `Delete(id)`: removes the entry from the in-memory cache and moves `baseFolder/<id>` to `baseFolder/deleted/<id>` for archival.
 - Automatic LRU eviction keeps the in-memory cache at or below the capacity you configure, while the disk copy is retained.
@@ -78,7 +79,7 @@ Each user folder contains exactly one JSON file named after the user ID. You can
 
 - `cache.ErrUserExists` is returned by `Set` if the user already exists in cache or on disk. Use `errors.Is` to check the value.
 - Other file-system or JSON errors are propagated directly; they usually warrant logging or bubbling up to the caller.
-- `Get` always returns a user struct (either rehydrated from disk or newly initialized). If you do not want on-demand creation, call a helper like `exists` yourself before `Get`.
+- `View` returns `ErrUserNotFound` when the user does not exist. Call `Set` up front if you need to guarantee the record is present.
 
 ## Testing
 
@@ -104,7 +105,7 @@ A fully working sample lives under `examples/basic`. Run it with:
 go run ./examples/basic
 ```
 
-The program writes user data into a temporary folder, exercises `Set`, `Get`, `Update`, and `Delete`, then prints the resulting archive location to illustrate that operations against one user do not block the whole cache.
+The program writes user data into a temporary folder, exercises `Set`, `View`, `Update`, and `Delete`, then prints the resulting archive location to illustrate that operations against one user do not block the whole cache.
 
 
 ## Project layout

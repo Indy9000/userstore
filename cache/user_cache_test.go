@@ -19,7 +19,7 @@ func newTestUser() *testUser {
 	return &testUser{}
 }
 
-func TestUserCacheSetAndGet(t *testing.T) {
+func TestUserCacheSetAndView(t *testing.T) {
 	dir := t.TempDir()
 	c := NewUserCache[*testUser](dir, 0, newTestUser)
 
@@ -29,22 +29,24 @@ func TestUserCacheSetAndGet(t *testing.T) {
 		t.Fatalf("Set failed: %v", err)
 	}
 
-	got, err := c.Get("user-a")
-	if err != nil {
-		t.Fatalf("Get failed: %v", err)
-	}
-	if got.Name != "alpha" {
-		t.Fatalf("expected cached name alpha, got %s", got.Name)
+	if err := c.View("user-a", func(got *testUser) error {
+		if got.Name != "alpha" {
+			t.Fatalf("expected cached name alpha, got %s", got.Name)
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("View failed: %v", err)
 	}
 
 	// Create a new cache instance to ensure data is loaded from disk.
 	c2 := NewUserCache[*testUser](dir, 0, newTestUser)
-	got2, err := c2.Get("user-a")
-	if err != nil {
-		t.Fatalf("Get from new cache failed: %v", err)
-	}
-	if got2.Name != "alpha" {
-		t.Fatalf("expected disk-loaded name alpha, got %s", got2.Name)
+	if err := c2.View("user-a", func(got2 *testUser) error {
+		if got2.Name != "alpha" {
+			t.Fatalf("expected disk-loaded name alpha, got %s", got2.Name)
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("View from new cache failed: %v", err)
 	}
 }
 
@@ -60,18 +62,15 @@ func TestUserCacheSetDuplicate(t *testing.T) {
 	}
 }
 
-func TestUserCacheGetCreatesUser(t *testing.T) {
+func TestUserCacheViewMissingReturnsError(t *testing.T) {
 	dir := t.TempDir()
 	c := NewUserCache[*testUser](dir, 0, newTestUser)
-	user, err := c.Get("new-user")
-	if err != nil {
-		t.Fatalf("Get failed: %v", err)
-	}
-	if user.GetUserID() != "new-user" {
-		t.Fatalf("expected user id new-user, got %s", user.GetUserID())
-	}
-	if user.GetLastUpdated().IsZero() {
-		t.Fatalf("expected lastUpdated to be set")
+	err := c.View("new-user", func(user *testUser) error {
+		t.Fatalf("viewer should not run for missing user")
+		return nil
+	})
+	if !errors.Is(err, ErrUserNotFound) {
+		t.Fatalf("expected ErrUserNotFound, got %v", err)
 	}
 }
 
@@ -84,11 +83,13 @@ func TestUserCacheUpdateWritesChanges(t *testing.T) {
 		t.Fatalf("Set failed: %v", err)
 	}
 
-	before, err := c.Get("user")
-	if err != nil {
-		t.Fatalf("initial Get failed: %v", err)
+	var beforeTime time.Time
+	if err := c.View("user", func(u *testUser) error {
+		beforeTime = u.GetLastUpdated()
+		return nil
+	}); err != nil {
+		t.Fatalf("initial View failed: %v", err)
 	}
-	beforeTime := before.GetLastUpdated()
 
 	time.Sleep(10 * time.Millisecond)
 	if err := c.Update("user", func(u *testUser) error {
@@ -98,15 +99,16 @@ func TestUserCacheUpdateWritesChanges(t *testing.T) {
 		t.Fatalf("Update failed: %v", err)
 	}
 
-	after, err := c.Get("user")
-	if err != nil {
-		t.Fatalf("Get after update failed: %v", err)
-	}
-	if after.Name != "after" {
-		t.Fatalf("expected Name after, got %s", after.Name)
-	}
-	if !after.GetLastUpdated().After(beforeTime) {
-		t.Fatalf("expected lastUpdated to advance")
+	if err := c.View("user", func(after *testUser) error {
+		if after.Name != "after" {
+			t.Fatalf("expected Name after, got %s", after.Name)
+		}
+		if !after.GetLastUpdated().After(beforeTime) {
+			t.Fatalf("expected lastUpdated to advance")
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("View after update failed: %v", err)
 	}
 }
 
@@ -128,12 +130,24 @@ func TestUserCacheUpdateRollsBackOnError(t *testing.T) {
 		t.Fatalf("expected error %v, got %v", wantErr, err)
 	}
 
-	user, err := c.Get("user")
-	if err != nil {
-		t.Fatalf("Get failed: %v", err)
+	if err := c.View("user", func(user *testUser) error {
+		if user.Name != "before" {
+			t.Fatalf("expected user to be rolled back to before, got %s", user.Name)
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("View failed: %v", err)
 	}
-	if user.Name != "before" {
-		t.Fatalf("expected user to be rolled back to before, got %s", user.Name)
+}
+
+func TestUserCacheUpdateMissingUser(t *testing.T) {
+	dir := t.TempDir()
+	c := NewUserCache[*testUser](dir, 0, newTestUser)
+	err := c.Update("does-not-exist", func(u *testUser) error {
+		return nil
+	})
+	if !errors.Is(err, ErrUserNotFound) {
+		t.Fatalf("expected ErrUserNotFound, got %v", err)
 	}
 }
 
@@ -157,7 +171,7 @@ func TestUserCacheEvictsLeastRecentlyUsed(t *testing.T) {
 	}
 
 	// Data should still exist on disk.
-	if _, err := c.Get("first"); err != nil {
+	if err := c.View("first", func(*testUser) error { return nil }); err != nil {
 		t.Fatalf("expected evicted item to be recoverable from disk, got %v", err)
 	}
 }

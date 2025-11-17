@@ -2,6 +2,21 @@
 
 All notable changes to this project will be documented in this file. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.0] - 2024-02-15
+
+### Added
+
+- `View` helper that acquires a read lock and runs a callback so callers inspect user data without leaking the shared pointer; the callback now receives `nil` when the user does not exist.
+- Internal `getOrLoad` helper shared by `View`/`Update`.
+- Documentation clarifying how to copy data out of `View`.
+
+### Changed
+
+- Removed the exported `Get` method in favor of `View`.
+- `View` no longer auto-creates empty records for missing users; `Update` now returns `ErrUserNotFound` when the target is absent.
+- Updated tests, README, and examples to use the closure-based API.
+- Bumped module version to `v0.4.0`.
+
 ## [0.3.0] - 2024-02-14
 
 ### Added
@@ -30,6 +45,7 @@ All notable changes to this project will be documented in this file. The format 
 
 - Initial release: generic `UserCache`, disk-backed persistence, and base models.
 
+[0.4.0]: https://github.com/indy9000/userstore/releases/tag/v0.4.0
 [0.3.0]: https://github.com/indy9000/userstore/releases/tag/v0.3.0
 [0.2.0]: https://github.com/indy9000/userstore/releases/tag/v0.2.0
 [0.1.0]: https://github.com/indy9000/userstore/releases/tag/v0.1.0
