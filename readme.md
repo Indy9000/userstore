@@ -85,6 +85,43 @@ Each user folder contains exactly one JSON file named after the user ID. You can
 
 The repository ships with table-driven unit tests covering the cache behavior (`go test ./...`). When adding new functionality, extend the test suite so disk interactions remain safe and deterministic.
 
+## Known issues
+
+### Concurrent View/Update on the same id triggers a `-race` warning
+
+`getOrLoad` (`cache/user_cache.go:100-110`) reads `elem.Value.(*entry[T]).value` after releasing the cache RWMutex:
+
+```go
+c.mu.RLock()
+elem, ok := c.cache[userId]
+c.mu.RUnlock()
+if ok {
+    c.mu.Lock()
+    c.touch(elem) // update lru
+    c.mu.Unlock()
+    return elem.Value.(*entry[T]).value, nil   // <-- read of elem.Value.value with no lock
+}
+```
+
+`persistLocked` (`cache/user_cache.go:225-249`) writes the same field while holding the cache mutex:
+
+```go
+c.mu.Lock()
+defer c.mu.Unlock()
+if elem, ok := c.cache[userId]; ok {
+    elem.Value.(*entry[T]).value = user   // <-- write protected by c.mu
+    c.touch(elem)
+}
+```
+
+When two goroutines run `Update` (or one `View` + one `Update`) on the same `userId`, the unprotected read in `getOrLoad` races the protected write in `persistLocked`. In practice the value being written is the same `*T` pointer that's already there (Update mutates fields in place; the entry's `value` slot doesn't change identity), so the read gets either the old or new pointer — both pointing at the same struct. Functionally benign at runtime; `go test -race` flags it.
+
+**Symptom:** any test that calls `View`/`Update` from many goroutines on the same id under `-race`.
+
+**Workaround for downstream callers:** avoid heavy concurrent View/Update on the same id, or wrap call sites in an outer mutex if `-race` cleanliness matters.
+
+**Suggested fix:** read `elem.Value.(*entry[T]).value` while still holding `c.mu` in `getOrLoad`. Either don't release the lock between map lookup and value read, or take the lock again briefly around line 109. Symmetric fix on the other read paths if any.
+
 ## Versioning
 
 Import the root module to introspect the published version at runtime:
