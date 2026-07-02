@@ -105,8 +105,10 @@ func (c *UserCache[T]) getOrLoad(userId string) (T, error) {
 	if ok {
 		c.mu.Lock()
 		c.touch(elem) // update lru
+		// read value while still holding c.mu — persistLocked reassigns it
+		v := elem.Value.(*entry[T]).value
 		c.mu.Unlock()
-		return elem.Value.(*entry[T]).value, nil
+		return v, nil
 	}
 	// not found in cache
 	// Load from disk

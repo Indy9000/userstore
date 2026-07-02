@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -12,7 +13,8 @@ import (
 
 type testUser struct {
 	models.BaseUser
-	Name string `json:"name"`
+	Name    string `json:"name"`
+	Counter int    `json:"counter"`
 }
 
 func newTestUser() *testUser {
@@ -187,6 +189,102 @@ func TestUserCacheStoresInUserFolders(t *testing.T) {
 	fp := filepath.Join(dir, "user-folder", "user-folder.json")
 	if _, err := os.Stat(fp); err != nil {
 		t.Fatalf("expected file to exist at %s: %v", fp, err)
+	}
+}
+
+// Adversarial: hammers one user with concurrent Updates. Under -race this
+// caught the unsynchronized read of entry.value in getOrLoad's cache-hit path
+// racing the write in persistLocked; it also guards against lost updates.
+func TestUserCacheConcurrentUpdateSameUser(t *testing.T) {
+	dir := t.TempDir()
+	c := NewUserCache[*testUser](dir, 0, newTestUser)
+	if err := c.Set("hot-user", func(u *testUser) {}); err != nil {
+		t.Fatalf("Set failed: %v", err)
+	}
+
+	const n = 100
+	var wg sync.WaitGroup
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if err := c.Update("hot-user", func(u *testUser) error {
+				u.Counter++
+				return nil
+			}); err != nil {
+				t.Errorf("Update failed: %v", err)
+			}
+		}()
+		// interleave readers to also exercise View vs Update on the same entry
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if err := c.View("hot-user", func(u *testUser) error {
+				_ = u.Counter
+				return nil
+			}); err != nil {
+				t.Errorf("View failed: %v", err)
+			}
+		}()
+	}
+	wg.Wait()
+
+	if err := c.View("hot-user", func(u *testUser) error {
+		if u.Counter != n {
+			t.Fatalf("lost updates: got %d, want %d", u.Counter, n)
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("final View failed: %v", err)
+	}
+}
+
+// Happy path: concurrent Updates spread across distinct users all land
+// correctly in memory and on disk.
+func TestUserCacheConcurrentUpdateDistinctUsers(t *testing.T) {
+	dir := t.TempDir()
+	c := NewUserCache[*testUser](dir, 0, newTestUser)
+
+	userIds := []string{"user-1", "user-2", "user-3", "user-4"}
+	for _, id := range userIds {
+		if err := c.Set(id, func(u *testUser) {}); err != nil {
+			t.Fatalf("Set %s failed: %v", id, err)
+		}
+	}
+
+	const perUser = 25
+	var wg sync.WaitGroup
+	for _, id := range userIds {
+		for i := 0; i < perUser; i++ {
+			wg.Add(1)
+			go func(id string) {
+				defer wg.Done()
+				if err := c.Update(id, func(u *testUser) error {
+					u.Counter++
+					u.Name = id
+					return nil
+				}); err != nil {
+					t.Errorf("Update %s failed: %v", id, err)
+				}
+			}(id)
+		}
+	}
+	wg.Wait()
+
+	// verify via a fresh cache so the values are read back from disk
+	c2 := NewUserCache[*testUser](dir, 0, newTestUser)
+	for _, id := range userIds {
+		if err := c2.View(id, func(u *testUser) error {
+			if u.Counter != perUser {
+				t.Fatalf("%s: got %d, want %d", id, u.Counter, perUser)
+			}
+			if u.Name != id {
+				t.Fatalf("%s: got name %s", id, u.Name)
+			}
+			return nil
+		}); err != nil {
+			t.Fatalf("View %s failed: %v", id, err)
+		}
 	}
 }
 
